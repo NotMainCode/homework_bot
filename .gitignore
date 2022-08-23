@@ -150,3 +150,6 @@ static/
 posts/static/
 media/
 
+# правила для black, isort, flake8
+/.flake8
+/pyproject.toml
