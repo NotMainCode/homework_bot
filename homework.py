@@ -1,163 +1,203 @@
-"""The main module of the Telegram bot."""
+"""Main module of Telegram bot."""
 
 import logging
 import os
 import sys
 import time
+from http import HTTPStatus
+from json import JSONDecodeError
+from typing import Union
 
 import requests
 import telegram
 from dotenv import load_dotenv
+from requests import RequestException
+
+import exceptions
 
 load_dotenv(override=True)
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-stream_handler = logging.StreamHandler(stream=sys.stdout)
-logger.addHandler(stream_handler)
-formatter = logging.Formatter(
-    "%(asctime)s - %(levelname)s - %(message)s - %(name)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-stream_handler.setFormatter(formatter)
-stream_handler.addFilter(logging.Filter(__name__))
 
 PRACTICUM_TOKEN = os.getenv("PRACTICUM_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 RETRY_TIME = 600
-TIME_OFFSET = 10801
 
 ENDPOINT = "https://practicum.yandex.ru/api/user_api/homework_statuses/"
 HEADERS = {"Authorization": f"OAuth {PRACTICUM_TOKEN}"}
 
-HOMEWORK_STATUSES = {
+HOMEWORK_VERDICTS = {
     "approved": "Работа проверена: ревьюеру всё понравилось. Ура!",
     "reviewing": "Работа взята на проверку ревьюером.",
     "rejected": "Работа проверена: у ревьюера есть замечания.",
 }
 
-previous_bot_message = ""
+
+def logging_settings() -> None:
+    """Logging settings."""
+    logger.setLevel(logging.DEBUG)
+    stream_handler = logging.StreamHandler(stream=sys.stdout)
+    logger.addHandler(stream_handler)
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s "
+        "[%(name)s] %(filename)s - %(lineno)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(logging.Filter(__name__))
 
 
-def send_message(bot, message):
+def send_message(bot: telegram.bot.Bot, message: str) -> None:
     """Sending a message to Telegram chat."""
-    global previous_bot_message
-    if previous_bot_message != message:
-        try:
-            bot.send_message(
-                chat_id=TELEGRAM_CHAT_ID,
-                text=message,
-            )
-        except Exception as error:
-            logger.error(f"Error sending message from bot: '{error}'")
-        else:
-            logger.info(f"Bot sent a message: '{message}'")
-            previous_bot_message = message
-
-
-def get_api_answer(current_timestamp):
-    """API service endpoint request."""
-    timestamp = current_timestamp or int(time.time())
-    params = {"from_date": timestamp}
-    homework_statuses = requests.get(ENDPOINT, headers=HEADERS, params=params)
-    if homework_statuses.status_code != 200:
-        raise Exception(
-            f"Status code of endpoint '{ENDPOINT}' does not match OK."
+    logger.info(f"Bot sends a message: '{message}'")
+    try:
+        bot.send_message(
+            chat_id=TELEGRAM_CHAT_ID,
+            text=message,
         )
-    return homework_statuses.json()
+    except telegram.TelegramError:
+        raise exceptions.TelegramSendMessageError(
+            "Error sending message from bot."
+        )
+    else:
+        logger.info(f"Bot sent a message: '{message}'")
 
 
-def check_response(response):
-    """Checking the service API response for correctness."""
+def get_api_answer(current_timestamp: int) -> Union[dict, list]:
+    """API service endpoint request."""
+    logger.info(f"Endpoint request: {ENDPOINT}")
+    params = {"from_date": current_timestamp}
+    try:
+        homework_statuses = requests.get(
+            ENDPOINT, headers=HEADERS, params=params
+        )
+    except RequestException:
+        raise exceptions.RequestError("API request failed")
+    if homework_statuses.status_code != HTTPStatus.OK:
+        raise exceptions.HTTPStatusNotOK(
+            (
+                f"Status code of API response is not OK: "
+                f"{homework_statuses.status_code}. Endpoint: {ENDPOINT}"
+            )
+        )
+    try:
+        return homework_statuses.json()
+    except JSONDecodeError:
+        raise exceptions.InvalidJSON(
+            f"API response contains invalid JSON: {homework_statuses}"
+        )
+
+
+def check_response(response: Union[dict, list]) -> list:
+    """Checking service API response for correctness."""
+    logger.info(f"Checking the API response for correctness: {response}")
     if isinstance(response, list):
         response = response[0]
     if not isinstance(response, dict):
-        raise Exception(
-            "The API response cast to Python data types is unexpected."
+        raise TypeError(
+            (
+                f"API response cast to Python data types "
+                f"is unexpected: {response}"
+            )
+        )
+    if "homeworks" not in response:
+        raise KeyError(
+            f"API response is missing homework information: {response}"
         )
     try:
         homeworks = response["homeworks"]
     except KeyError:
-        Exception("The API response is missing homework information.")
+        raise exceptions.ResponseNoHomework(
+            f"API response is missing homework information: {response}"
+        )
     if not isinstance(homeworks, list):
-        raise Exception("The data type in the API response is unexpected.")
+        raise TypeError(f"Data type in API response is unexpected: {response}")
     if not homeworks:
-        logger.debug(
-            "The API response does not contain information about homeworks."
+        raise exceptions.HomeworkNoNewInformation(
+            (
+                f"API response does not contain new information "
+                f"about homeworks: {response}"
+            )
+        )
+    if "current_date" not in response:
+        raise exceptions.NoResponseTime(
+            f"API response is missing response time: {response}"
         )
     return homeworks
 
 
-def parse_status(homework):
+def parse_status(homework: dict) -> str:
     """Get homework status."""
+    logger.info(f"Getting homework status: {homework}")
     homework_status = homework.get("status")
     if not homework_status:
-        raise Exception("No homework status found in API response.")
-    try:
-        verdict = HOMEWORK_STATUSES[homework_status]
-    except KeyError:
-        Exception(
-            "Undocumented homework status was found in the API response."
+        raise KeyError(f"No homework status found in API response: {homework}")
+    verdict = HOMEWORK_VERDICTS.get(homework_status)
+    if not verdict:
+        raise KeyError(
+            (
+                f"Undocumented homework status was found in API response: "
+                f"{homework}"
+            )
         )
-    try:
-        homework_name = homework["homework_name"]
-    except KeyError:
-        Exception("No homework title found in API response.")
-    try:
-        homework_name = homework["homework_name"]
-    except ValueError:
-        Exception("No homework title found in API response.")
+    homework_name = homework.get("homework_name")
     if not homework_name:
-        raise Exception("No homework title found in API response.")
-
+        raise KeyError(f"No homework title found in API response: {homework}")
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-def check_tokens():
-    """Checking the availability of environment variables."""
-    return (
-        bool(PRACTICUM_TOKEN)
-        and bool(TELEGRAM_TOKEN)
-        and bool(TELEGRAM_CHAT_ID)
+def check_tokens() -> bool:
+    """Checking availability of environment variables."""
+    logger.info(
+        f"Checking the availability of environment variables."
+        f"PRACTICUM_TOKEN = {PRACTICUM_TOKEN}, "
+        f"TELEGRAM_TOKEN = {TELEGRAM_TOKEN}, "
+        f"TELEGRAM_CHAT_ID = {TELEGRAM_CHAT_ID}, "
     )
+    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
 
 
-def main():
-    """The main logic of the bot."""
+def main() -> None:
+    """Main logic of bot."""
     if not check_tokens():
-        logger.critical(
-            "Missing required environment variable(s) during bot startup.",
-            exc_info=True,
+        message = (
+            f"Missing required environment variable(s) during bot startup. "
+            f"PRACTICUM_TOKEN = {PRACTICUM_TOKEN}, "
+            f"TELEGRAM_TOKEN = {TELEGRAM_TOKEN}, "
+            f"TELEGRAM_CHAT_ID = {TELEGRAM_CHAT_ID}, "
         )
-        exit("The program has been forcibly stopped.")
+        logger.critical(message, exc_info=True)
+        exit(message)
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    current_timestamp = int(time.time())
+    previous_bot_message = ""
+    current_timestamp = 0
     while True:
         try:
             response = get_api_answer(current_timestamp)
             homeworks = check_response(response)
-            if homeworks:
-                current_homework = homeworks[-1]
-                message = parse_status(current_homework)
+            current_homework = homeworks[0]
+            message = parse_status(current_homework)
+            logger.info(message)
+            if previous_bot_message != message:
                 send_message(bot, message)
-                date_homework = current_homework.get("date_updated")
-                current_timestamp = (
-                    int(
-                        time.mktime(
-                            time.strptime(date_homework, "%Y-%m-%dT%H:%M:%SZ")
-                        )
-                    )
-                    + TIME_OFFSET
-                )
-            time.sleep(RETRY_TIME)
+                previous_bot_message = message
+                current_timestamp = response.get("current_date")
+        except exceptions.TelegramSendMessageError as error:
+            logger.error(f"Program crash: {error}", exc_info=True)
+        except exceptions.DebugInfo as error:
+            logger.debug(error)
         except Exception as error:
             message = f"Program crash: {error}"
             logger.error(message, exc_info=True)
-            send_message(bot, message)
+            if previous_bot_message != message:
+                send_message(bot, message)
+                previous_bot_message = message
+        finally:
             time.sleep(RETRY_TIME)
 
 
 if __name__ == "__main__":
+    logging_settings()
     main()
