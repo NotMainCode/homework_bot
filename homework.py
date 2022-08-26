@@ -22,7 +22,7 @@ PRACTICUM_TOKEN = os.getenv("PRACTICUM_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-RETRY_TIME = 600
+RETRY_TIME = 5
 
 ENDPOINT = "https://practicum.yandex.ru/api/user_api/homework_statuses/"
 HEADERS = {"Authorization": f"OAuth {PRACTICUM_TOKEN}"}
@@ -49,7 +49,7 @@ def logging_settings() -> None:
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
-    """Sending a message to Telegram chat."""
+    """Sending message to Telegram from "try" block of main function."""
     logger.info(f"Bot sends a message: '{message}'")
     try:
         bot.send_message(
@@ -62,6 +62,18 @@ def send_message(bot: telegram.Bot, message: str) -> None:
         )
     else:
         logger.info(f"Bot sent a message: '{message}'")
+
+
+def bot_message_for_except(bot: telegram.Bot, message: str) -> str:
+    """Sending message to Telegram from "except" block of main function."""
+    try:
+        send_message(bot, message)
+    except telegram.TelegramError as error:
+        message = f"Program crash: Error sending message from bot: {error}"
+        logger.error(message, exc_info=True)
+    else:
+        logger.info(f"Bot sent a message: '{message}'")
+        return message
 
 
 def get_api_answer(current_timestamp: int) -> dict:
@@ -171,8 +183,7 @@ def main() -> None:
             message = f"Program crash: {error}"
             logger.error(message, exc_info=True)
             if previous_bot_message != message:
-                send_message(bot, message)
-                previous_bot_message = message
+                previous_bot_message = bot_message_for_except(bot, message)
         finally:
             time.sleep(RETRY_TIME)
 
