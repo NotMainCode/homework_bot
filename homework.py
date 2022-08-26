@@ -6,7 +6,6 @@ import sys
 import time
 from http import HTTPStatus
 from json import JSONDecodeError
-from typing import Union
 
 import requests
 import telegram
@@ -39,7 +38,6 @@ def logging_settings() -> None:
     """Logging settings."""
     logger.setLevel(logging.DEBUG)
     stream_handler = logging.StreamHandler(stream=sys.stdout)
-    logger.addHandler(stream_handler)
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(message)s "
         "[%(name)s] %(filename)s - %(lineno)s",
@@ -47,9 +45,10 @@ def logging_settings() -> None:
     )
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(logging.Filter(__name__))
+    logger.addHandler(stream_handler)
 
 
-def send_message(bot: telegram.bot.Bot, message: str) -> None:
+def send_message(bot: telegram.Bot, message: str) -> None:
     """Sending a message to Telegram chat."""
     logger.info(f"Bot sends a message: '{message}'")
     try:
@@ -57,30 +56,28 @@ def send_message(bot: telegram.bot.Bot, message: str) -> None:
             chat_id=TELEGRAM_CHAT_ID,
             text=message,
         )
-    except telegram.TelegramError:
+    except telegram.TelegramError as error:
         raise exceptions.TelegramSendMessageError(
-            "Error sending message from bot."
+            f"Error sending message from bot: {error}"
         )
     else:
         logger.info(f"Bot sent a message: '{message}'")
 
 
-def get_api_answer(current_timestamp: int) -> Union[dict, list]:
+def get_api_answer(current_timestamp: int) -> dict:
     """API service endpoint request."""
-    logger.info(f"Endpoint request: {ENDPOINT}")
+    logger.info("Endpoint request.")
     params = {"from_date": current_timestamp}
     try:
         homework_statuses = requests.get(
             ENDPOINT, headers=HEADERS, params=params
         )
-    except RequestException:
-        raise exceptions.RequestError("API request failed")
+    except RequestException as error:
+        raise exceptions.RequestError(f"API request failed: {error}")
     if homework_statuses.status_code != HTTPStatus.OK:
         raise exceptions.HTTPStatusNotOK(
-            (
-                f"Status code of API response is not OK: "
-                f"{homework_statuses.status_code}. Endpoint: {ENDPOINT}"
-            )
+            f"Status code of API response is not OK: "
+            f"{homework_statuses.status_code}. Endpoint: {ENDPOINT}"
         )
     try:
         return homework_statuses.json()
@@ -90,57 +87,44 @@ def get_api_answer(current_timestamp: int) -> Union[dict, list]:
         )
 
 
-def check_response(response: Union[dict, list]) -> list:
+def check_response(response: dict) -> list:
     """Checking service API response for correctness."""
-    logger.info(f"Checking the API response for correctness: {response}")
-    if isinstance(response, list):
-        response = response[0]
+    logger.info("Checking the API response for correctness.")
     if not isinstance(response, dict):
         raise TypeError(
-            (
-                f"API response cast to Python data types "
-                f"is unexpected: {response}"
-            )
+            f"API response cast to Python data types "
+            f"is unexpected: {response}"
         )
     if "homeworks" not in response:
-        raise KeyError(
-            f"API response is missing homework information: {response}"
-        )
-    try:
-        homeworks = response["homeworks"]
-    except KeyError:
         raise exceptions.ResponseNoHomework(
             f"API response is missing homework information: {response}"
-        )
-    if not isinstance(homeworks, list):
-        raise TypeError(f"Data type in API response is unexpected: {response}")
-    if not homeworks:
-        raise exceptions.HomeworkNoNewInformation(
-            (
-                f"API response does not contain new information "
-                f"about homeworks: {response}"
-            )
         )
     if "current_date" not in response:
         raise exceptions.NoResponseTime(
             f"API response is missing response time: {response}"
+        )
+    homeworks = response["homeworks"]
+    if not isinstance(homeworks, list):
+        raise TypeError(f"Data type in API response is unexpected: {response}")
+    if not homeworks:
+        raise exceptions.HomeworkNoNewInformation(
+            f"API response does not contain new information "
+            f"about homeworks: {response}"
         )
     return homeworks
 
 
 def parse_status(homework: dict) -> str:
     """Get homework status."""
-    logger.info(f"Getting homework status: {homework}")
+    logger.info("Getting homework status.")
     homework_status = homework.get("status")
     if not homework_status:
         raise KeyError(f"No homework status found in API response: {homework}")
     verdict = HOMEWORK_VERDICTS.get(homework_status)
     if not verdict:
         raise KeyError(
-            (
-                f"Undocumented homework status was found in API response: "
-                f"{homework}"
-            )
+            f"Undocumented homework status was found in API response: "
+            f"{homework}"
         )
     homework_name = homework.get("homework_name")
     if not homework_name:
@@ -150,13 +134,8 @@ def parse_status(homework: dict) -> str:
 
 def check_tokens() -> bool:
     """Checking availability of environment variables."""
-    logger.info(
-        f"Checking the availability of environment variables."
-        f"PRACTICUM_TOKEN = {PRACTICUM_TOKEN}, "
-        f"TELEGRAM_TOKEN = {TELEGRAM_TOKEN}, "
-        f"TELEGRAM_CHAT_ID = {TELEGRAM_CHAT_ID}, "
-    )
-    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
+    logger.info("Checking the availability of environment variables.")
+    return all((PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID))
 
 
 def main() -> None:
@@ -200,4 +179,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     logging_settings()
-    main()
+    try:
+        logger.info("The bot has started.")
+        main()
+    except KeyboardInterrupt:
+        logger.info("The bot has completed its work.")
