@@ -49,7 +49,7 @@ def logging_settings() -> None:
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
-    """Sending message to Telegram from "try" block of main function."""
+    """Sending message to Telegram."""
     logger.info(f"Bot sends a message: '{message}'")
     try:
         bot.send_message(
@@ -62,18 +62,6 @@ def send_message(bot: telegram.Bot, message: str) -> None:
         )
     else:
         logger.info(f"Bot sent a message: '{message}'")
-
-
-def bot_message_for_except(bot: telegram.Bot, message: str) -> str:
-    """Sending message to Telegram from "except" block of main function."""
-    try:
-        send_message(bot, message)
-    except telegram.TelegramError as error:
-        message = f"Program crash: Error sending message from bot: {error}"
-        logger.error(message, exc_info=True)
-    else:
-        logger.info(f"Bot sent a message: '{message}'")
-        return message
 
 
 def get_api_answer(current_timestamp: int) -> dict:
@@ -162,6 +150,7 @@ def main() -> None:
         logger.critical(message, exc_info=True)
         exit(message)
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
+    message = ""
     previous_bot_message = ""
     current_timestamp = 0
     while True:
@@ -171,27 +160,30 @@ def main() -> None:
             current_homework = homeworks[0]
             message = parse_status(current_homework)
             logger.info(message)
-            if previous_bot_message != message:
-                send_message(bot, message)
-                previous_bot_message = message
-                current_timestamp = response.get("current_date")
-        except exceptions.TelegramSendMessageError as error:
-            logger.error(f"Program crash: {error}", exc_info=True)
+            need_message = True
         except exceptions.DebugInfo as error:
             logger.debug(error)
+            need_message = False
         except Exception as error:
             message = f"Program crash: {error}"
             logger.error(message, exc_info=True)
-            if previous_bot_message != message:
-                previous_bot_message = bot_message_for_except(bot, message)
-        finally:
-            time.sleep(RETRY_TIME)
+            need_message = True
+        else:
+            current_timestamp = response["current_date"]
+        if previous_bot_message != message and need_message:
+            try:
+                send_message(bot, message)
+            except exceptions.TelegramSendMessageError as error:
+                logger.error(f"Program crash: {error}", exc_info=True)
+            else:
+                previous_bot_message = message
+        time.sleep(RETRY_TIME)
 
 
 if __name__ == "__main__":
     logging_settings()
+    logger.info("The bot has started.")
     try:
-        logger.info("The bot has started.")
         main()
     except KeyboardInterrupt:
         logger.info("The bot has completed its work.")
