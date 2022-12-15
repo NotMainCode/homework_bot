@@ -12,6 +12,13 @@ Python 3.7
 
 ### For launch
 
+Create and activate virtual environment
+```
+py -3.7 -m venv venv
+
+source venv/Scripts/activate
+```
+
 - Install dependencies from requirements.txt file
 ```
 pip install -r requirements.txt
